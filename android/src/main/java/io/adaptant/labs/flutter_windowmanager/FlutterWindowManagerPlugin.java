@@ -2,6 +2,7 @@ package io.adaptant.labs.flutter_windowmanager;
 
 import android.app.Activity;
 import android.os.Build;
+import android.view.Window;
 import android.view.WindowManager;
 
 import androidx.annotation.NonNull;
@@ -14,40 +15,62 @@ import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
-import io.flutter.plugin.common.PluginRegistry.Registrar;
 
-/** FlutterWindowManagerPlugin */
-public class FlutterWindowManagerPlugin implements MethodCallHandler, FlutterPlugin, ActivityAware {
+/** FlutterWindowManagerPlugin (Embedding v2) */
+public class FlutterWindowManagerPlugin
+        implements MethodCallHandler, FlutterPlugin, ActivityAware {
+
+  private static final String CHANNEL_NAME = "flutter_windowmanager";
+
   private Activity activity;
+  private MethodChannel channel;
 
   @SuppressWarnings("unused")
-  public FlutterWindowManagerPlugin() { }
+  public FlutterWindowManagerPlugin() {}
 
-  private FlutterWindowManagerPlugin(Activity activity) {
-    this.activity = activity;
-  }
-
-  /** Plugin registration. */
-  @Deprecated
-  public static void registerWith(Registrar registrar) {
-    new FlutterWindowManagerPlugin(registrar.activity()).registerWith(registrar.messenger());
-  }
+  /* ---------- Channel wiring ---------- */
 
   private void registerWith(BinaryMessenger binaryMessenger) {
-    final MethodChannel channel = new MethodChannel(binaryMessenger, "flutter_windowmanager");
+    channel = new MethodChannel(binaryMessenger, CHANNEL_NAME);
     channel.setMethodCallHandler(this);
   }
 
-
   @Override
-  public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
-    registerWith(flutterPluginBinding.getBinaryMessenger());
+  public void onAttachedToEngine(@NonNull FlutterPluginBinding binding) {
+    registerWith(binding.getBinaryMessenger());
   }
 
   @Override
-  public void onDetachedFromEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
-
+  public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
+    if (channel != null) {
+      channel.setMethodCallHandler(null);
+      channel = null;
+    }
   }
+
+  /* ---------- ActivityAware lifecycle ---------- */
+
+  @Override
+  public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
+    activity = binding.getActivity();
+  }
+
+  @Override
+  public void onDetachedFromActivityForConfigChanges() {
+    activity = null;
+  }
+
+  @Override
+  public void onReattachedToActivityForConfigChanges(@NonNull ActivityPluginBinding binding) {
+    onAttachedToActivity(binding);
+  }
+
+  @Override
+  public void onDetachedFromActivity() {
+    activity = null;
+  }
+
+  /* ---------- Flag validation (dipertahankan) ---------- */
 
   /**
    * Validate flag specification against WindowManager.LayoutParams and API levels, as per:
@@ -107,60 +130,56 @@ public class FlutterWindowManagerPlugin implements MethodCallHandler, FlutterPlu
   private boolean validLayoutParams(Result result, int flags) {
     for (int i = 0; i < Integer.SIZE; i++) {
       int flag = (1 << i);
-      if ((flags & flag) == 1) {
+      // Fix minor bug: cek bit harus != 0
+      if ((flags & flag) != 0) {
         if (!validLayoutParam(flag)) {
-          result.error("FlutterWindowManagerPlugin","FlutterWindowManagerPlugin: invalid flag specification: " + Integer.toHexString(flag), null);
+          result.error(
+                  "FlutterWindowManagerPlugin",
+                  "FlutterWindowManagerPlugin: invalid flag specification: "
+                          + Integer.toHexString(flag),
+                  null);
           return false;
         }
       }
     }
-
     return true;
   }
 
+  /* ---------- MethodChannel handler ---------- */
+
   @Override
   public void onMethodCall(MethodCall call, Result result) {
-    final int flags = call.argument("flags");
+    final Integer flags = call.argument("flags");
 
     if (activity == null) {
-      result.error("FlutterWindowManagerPlugin", "FlutterWindowManagerPlugin: ignored flag state change, current activity is null", null);
+      result.error(
+              "FlutterWindowManagerPlugin",
+              "FlutterWindowManagerPlugin: ignored flag state change, current activity is null",
+              null);
+      return;
+    }
+
+    if (flags == null) {
+      result.error("FlutterWindowManagerPlugin", "Missing 'flags' argument", null);
+      return;
     }
 
     if (!validLayoutParams(result, flags)) {
       return;
     }
 
+    Window window = activity.getWindow();
     switch (call.method) {
       case "addFlags":
-        activity.getWindow().addFlags(flags);
+        window.addFlags(flags);
         result.success(true);
         break;
       case "clearFlags":
-        activity.getWindow().clearFlags(flags);
+        window.clearFlags(flags);
         result.success(true);
         break;
       default:
         result.notImplemented();
     }
-  }
-
-  @Override
-  public void onAttachedToActivity(@NonNull ActivityPluginBinding activityPluginBinding) {
-    activity = activityPluginBinding.getActivity();
-  }
-
-  @Override
-  public void onDetachedFromActivityForConfigChanges() {
-    activity = null;
-  }
-
-  @Override
-  public void onReattachedToActivityForConfigChanges(@NonNull ActivityPluginBinding activityPluginBinding) {
-    onAttachedToActivity(activityPluginBinding);
-  }
-
-  @Override
-  public void onDetachedFromActivity() {
-    activity = null;
   }
 }
